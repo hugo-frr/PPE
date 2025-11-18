@@ -1,0 +1,68 @@
+# ---- ENVIRONNEMENT PYTHON ----
+venv/
+env/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.egg-info/
+dist/
+build/
+
+# ---- NOTEBOOKS ----
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---- DONNÉES ----
+*.csv
+*.xlsx
+*.xls
+*.json
+*.parquet
+*.feather
+*.db
+*.sqlite
+data/
+datasets/
+raw_data/
+processed_data/
+
+# ---- LOGS & FICHIERS TEMP ----
+*.log
+*.tmp
+*.temp
+*.swp
+*.bak
+
+# ---- MODELES IA ----
+*.h5
+*.hdf5
+*.keras
+*.ckpt*
+checkpoint/
+checkpoints/
+models/
+saved_models/
+
+# ---- CONFIG / SECRETS ----
+*.env
+.env.*
+*.ini
+*.cfg
+
+# ---- SYSTEME & EDITORS ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# ---- CACHE LIBRARIES ----
+__pycache__/
+*.cache
+.cache/
+pip-wheel-metadata/
+pip-wheel/
