@@ -17,7 +17,7 @@ build/
 *.ipynb_checkpoints
 
 # ---- DONNÉES ----
-*.csv
+
 *.xlsx
 *.xls
 *.json
@@ -25,7 +25,6 @@ build/
 *.feather
 *.db
 *.sqlite
-data/
 datasets/
 raw_data/
 processed_data/
