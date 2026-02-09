@@ -1,141 +1,98 @@
 """
-Script : process_data.py
-Objectif :
-    - Charger les données brutes (Airbus, LVMH, Stellantis, CAC40) depuis data/raw/
-    - Utiliser les fichiers CSV générés par yfinance :
-        Date,Open,High,Low,Close,Adj Close,Volume
-    - Calculer les log-rendements
-    - Aligner toutes les séries sur les mêmes dates
-    - Ajouter une colonne TariffEvent (0 par défaut)
-    - Sauvegarder un fichier unique dans data/processed/market_data_processed.csv
+Prépare un dataset unique aligné sur dates communes:
+- prix
+- log-rendements
+- indicateur TariffEvent (optionnel)
 """
 
-import os
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
-RAW_DIR = "data/raw"
-PROCESSED_DIR = "data/processed"
+from config import ASSET_NAMES, DATA_DIR, INDEX_NAME, PROCESSED_DIR, RAW_DIR
 
-ASSETS = ["Airbus", "LVMH", "Stellantis"]
-INDEX_NAME = "CAC40"
-
-# Si un jour tu crées un fichier d’événements : data/external/tariff_events.csv
-TARIFF_EVENTS_FILE = "data/external/tariff_events.csv"
+TARIFF_EVENTS_FILE = DATA_DIR / "external" / "tariff_events.csv"
 
 
-def ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
+def _extract_price_column(df: pd.DataFrame) -> str:
+    for candidate in ("Adj Close", "Close", "Price"):
+        if candidate in df.columns:
+            return candidate
+    raise ValueError("Aucune colonne de prix trouvée (Adj Close/Close/Price).")
 
 
-def load_asset(name: str) -> pd.DataFrame:
-    """
-    Charge un CSV yfinance standard de la forme :
+def load_asset(asset_name: str) -> pd.DataFrame:
+    csv_path = RAW_DIR / f"{asset_name}.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Fichier introuvable: {csv_path}")
 
-    Date,Open,High,Low,Close,Adj Close,Volume
-
-    et retourne un DataFrame indexé par Date avec :
-        - {name}_price
-        - {name}_ret
-    """
-    file_path = os.path.join(RAW_DIR, f"{name}.csv")
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Fichier introuvable : {file_path}")
-
-    print(f"[Chargement] {file_path}")
-    df = pd.read_csv(file_path)
-
+    df = pd.read_csv(csv_path)
     if "Date" not in df.columns:
-        raise ValueError(f"Colonne 'Date' manquante dans {file_path}")
+        raise ValueError(f"Colonne 'Date' manquante dans {csv_path}")
 
-    # Conversion en datetime + tri
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"])
-    df = df.sort_values("Date").set_index("Date")
+    df = df.dropna(subset=["Date"]).sort_values("Date").set_index("Date")
 
-    # Choix de la colonne de prix : Adj Close si possible, sinon Close
-    price_col = "Adj Close" if "Adj Close" in df.columns else "Close"
-    if price_col not in df.columns:
-        raise ValueError(f"Aucune colonne de prix ('Adj Close' ou 'Close') trouvée dans {file_path}")
+    price_col = _extract_price_column(df)
+    price = pd.to_numeric(df[price_col], errors="coerce").dropna()
 
-    # Conversion en float
-    df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
-    df = df.dropna(subset=[price_col])
-
-    # Renommage
-    out = df[[price_col]].rename(columns={price_col: f"{name}_price"})
-
-    # Log-rendements
-    out[f"{name}_ret"] = np.log(out[f"{name}_price"] / out[f"{name}_price"].shift(1))
-
+    out = pd.DataFrame(index=price.index)
+    out[f"{asset_name}_price"] = price
+    out[f"{asset_name}_ret"] = np.log(price / price.shift(1))
     return out
 
 
 def add_tariff_event_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ajoute une colonne TariffEvent :
-      - Si data/external/tariff_events.csv existe :
-            fusionne les événements
-      - Sinon :
-            met 0 partout
-    Format attendu pour tariff_events.csv :
-        Date,TariffEvent
-        2025-03-01,1
-        2025-06-15,1
-    """
-    if os.path.exists(TARIFF_EVENTS_FILE):
-        print(f"[Info] Fichier d'événements trouvé : {TARIFF_EVENTS_FILE}")
-        events = pd.read_csv(TARIFF_EVENTS_FILE)
-        if "Date" not in events.columns or "TariffEvent" not in events.columns:
-            raise ValueError("Le fichier tariff_events.csv doit contenir les colonnes 'Date' et 'TariffEvent'.")
+    out = df.copy()
+    out["TariffEvent"] = 0
 
-        events["Date"] = pd.to_datetime(events["Date"], errors="coerce")
-        events = events.dropna(subset=["Date"]).set_index("Date").sort_index()
+    if not TARIFF_EVENTS_FILE.exists():
+        return out
 
-        df["TariffEvent"] = 0
-        df.update(events[["TariffEvent"]])
-    else:
-        print("[Info] Aucun fichier d'événements trouvé. TariffEvent = 0.")
-        df["TariffEvent"] = 0
+    events = pd.read_csv(TARIFF_EVENTS_FILE)
+    required = {"Date", "TariffEvent"}
+    if not required.issubset(events.columns):
+        raise ValueError(
+            "Le fichier tariff_events.csv doit contenir les colonnes Date et TariffEvent."
+        )
 
+    events["Date"] = pd.to_datetime(events["Date"], errors="coerce")
+    events = events.dropna(subset=["Date"])
+    events["TariffEvent"] = pd.to_numeric(events["TariffEvent"], errors="coerce").fillna(0)
+    events = events.groupby("Date", as_index=True)["TariffEvent"].max()
+
+    out = out.join(events.rename("TariffEvent"), how="left", rsuffix="_event")
+    if "TariffEvent_event" in out.columns:
+        out["TariffEvent"] = out["TariffEvent_event"].fillna(out["TariffEvent"])
+        out = out.drop(columns=["TariffEvent_event"])
+    out["TariffEvent"] = out["TariffEvent"].fillna(0).astype(int)
+    return out
+
+
+def build_market_dataframe() -> pd.DataFrame:
+    frames = [load_asset(name) for name in ASSET_NAMES + [INDEX_NAME]]
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merged.join(frame, how="inner")
+    merged = merged.dropna()
+    merged = add_tariff_event_column(merged)
+    return merged
+
+
+def process_and_save() -> pd.DataFrame:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    df = build_market_dataframe()
+    output_path = PROCESSED_DIR / "market_data_processed.csv"
+    df.to_csv(output_path)
+    print(f"[OK] Dataset sauvegardé: {output_path} ({len(df)} lignes)")
     return df
 
 
-def main():
-    print("\n=== Prétraitement des données de marché ===\n")
-
-    ensure_dir(PROCESSED_DIR)
-
-    # 1. Charger les actifs individuels
-    all_dfs = []
-    for asset in ASSETS:
-        df_asset = load_asset(asset)
-        all_dfs.append(df_asset)
-
-    # 2. Charger le CAC40
-    df_index = load_asset(INDEX_NAME)
-    all_dfs.append(df_index)
-
-    # 3. Fusion sur les dates communes
-    print("[Fusion] Alignement des séries temporelles sur les dates communes...")
-    df_merged = all_dfs[0]
-    for df in all_dfs[1:]:
-        df_merged = df_merged.join(df, how="inner")
-
-    # 4. Suppression des premières lignes NaN dues aux shifts
-    df_merged = df_merged.dropna()
-
-    # 5. Ajout de TariffEvent
-    df_merged = add_tariff_event_column(df_merged)
-
-    # 6. Sauvegarde
-    output_file = os.path.join(PROCESSED_DIR, "market_data_processed.csv")
-    df_merged.to_csv(output_file)
-
-    print(f"\n[OK] Fichier final sauvegardé : {output_file}")
-    print("Colonnes :", list(df_merged.columns))
-    print(f"Nombre de lignes : {len(df_merged)}")
-    print("\n=== Terminé ===\n")
+def main() -> None:
+    print("=== Prétraitement des données ===")
+    process_and_save()
+    print("=== Terminé ===")
 
 
 if __name__ == "__main__":

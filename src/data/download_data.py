@@ -1,73 +1,99 @@
 """
-Script : download_data.py
-Objectif : Télécharger automatiquement les données historiques
-           de Airbus, LVMH, Stellantis et du CAC40.
-
-Actions françaises :
- - Airbus      : AIR.PA
- - LVMH        : MC.PA
- - Stellantis  : STLAM.MI  (cotée à Milan) OU STLA.PA selon Yahoo Finance
-
-Indice :
- - CAC40       : ^FCHI
-
-Format de sortie : CSV dans data/raw/
+Télécharge les données de marché et sauvegarde un CSV par actif dans data/raw/.
 """
 
+from __future__ import annotations
+
+from typing import Iterable
+
+import pandas as pd
 import yfinance as yf
-import os
 
-# -----------------------------
-# 1. Configuration
-# -----------------------------
-
-TICKERS = {
-    
-    "Stellantis": "STLAP.PA",  # Stellantis Paris (CAC40)
-}
-
-START_DATE = "2018-01-01"
-END_DATE = "2025-12-31"
-
-OUTPUT_DIR = "data/raw/"
+from config import END_DATE, RAW_DIR, START_DATE, TICKER_CANDIDATES
 
 
-# -----------------------------
-# 2. Création du dossier si besoin
-# -----------------------------
+def _extract_close_series(df: pd.DataFrame) -> pd.Series:
+    if "Adj Close" in df.columns:
+        series = df["Adj Close"]
+    elif "Close" in df.columns:
+        series = df["Close"]
+    elif "Price" in df.columns:
+        series = df["Price"]
+    else:
+        raise ValueError("Aucune colonne prix trouvée (Adj Close/Close/Price).")
+    return pd.to_numeric(series, errors="coerce").dropna()
 
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-    print(f"[+] Dossier créé : {OUTPUT_DIR}")
 
-
-# -----------------------------
-# 3. Téléchargement des données
-# -----------------------------
-
-def download_and_save(ticker_name, ticker_symbol):
-    print(f"[Téléchargement] {ticker_name} ({ticker_symbol}) ...")
-
-    data = yf.download(
-        ticker_symbol,
-        start=START_DATE,
-        end=END_DATE,
-        progress=True
+def _download_symbol(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    df = yf.download(
+        symbol,
+        start=start_date,
+        end=end_date,
+        progress=False,
+        auto_adjust=False,
+        threads=False,
     )
-
-    file_path = os.path.join(OUTPUT_DIR, f"{ticker_name}.csv")
-    data.to_csv(file_path)
-
-    print(f"[OK] Données sauvegardées : {file_path}\n")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
 
 
-def main():
-    print("\n=== Téléchargement des données financières ===\n")
+def _is_usable(df: pd.DataFrame) -> bool:
+    if df.empty:
+        return False
+    try:
+        close = _extract_close_series(df)
+    except ValueError:
+        return False
+    return len(close) >= 120 and close.nunique() > 10
 
-    for name, symbol in TICKERS.items():
-        download_and_save(name, symbol)
 
-    print("\n=== Terminé ! ===\n")
+def download_market_data(
+    ticker_candidates: dict[str, Iterable[str]] | None = None,
+    start_date: str = START_DATE,
+    end_date: str = END_DATE,
+) -> dict[str, str]:
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    candidates = ticker_candidates or TICKER_CANDIDATES
+    selected_symbols: dict[str, str] = {}
+
+    for asset_name, symbols in candidates.items():
+        print(f"[Téléchargement] {asset_name} ...")
+        last_error = None
+
+        for symbol in symbols:
+            try:
+                df = _download_symbol(symbol, start_date, end_date)
+                if not _is_usable(df):
+                    print(f"  - {symbol}: données insuffisantes.")
+                    continue
+
+                df = df.reset_index()
+                output_path = RAW_DIR / f"{asset_name}.csv"
+                df.to_csv(output_path, index=False)
+                selected_symbols[asset_name] = symbol
+
+                print(f"  - OK {symbol} -> {output_path} ({len(df)} lignes)")
+                break
+            except Exception as exc:  # pragma: no cover (dépend d'API externe)
+                last_error = exc
+                print(f"  - {symbol}: échec ({exc})")
+
+        if asset_name not in selected_symbols:
+            raise RuntimeError(
+                f"Aucun ticker valide trouvé pour {asset_name}. "
+                f"Dernière erreur: {last_error}"
+            )
+
+    return selected_symbols
+
+
+def main() -> None:
+    print("=== Téléchargement des données de marché ===")
+    selected = download_market_data()
+    print("=== Terminé ===")
+    for asset_name, symbol in selected.items():
+        print(f"  {asset_name}: {symbol}")
 
 
 if __name__ == "__main__":
