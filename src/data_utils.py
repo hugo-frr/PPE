@@ -1,81 +1,54 @@
-import yfinance as yf
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
-import math
 
-# ---------------------------
-# 1. Télécharger les données
-# ---------------------------
+from config import PROCESSED_DIR, SEQ_LEN, TEST_RATIO
+from data.process_data import process_and_save as _process_and_save
 
-TICKERS = ["VK.PA", "APAM.AS", "AIR.PA"]  # Vallourec, Aperam, Airbus
-data = yf.download(TICKERS, start="2018-01-01", end="2025-10-01")["Close"]
 
-# Sélection d’un titre pour le MVP (on commence simple)
-df = data["VK.PA"].dropna().to_frame()
-df.columns = ["Price"]
+def processed_data_path() -> str:
+    return str(PROCESSED_DIR / "market_data_processed.csv")
 
-# ---------------------------
-# 2. Prétraitement
-# ---------------------------
 
-scaler = MinMaxScaler()
-df["Scaled"] = scaler.fit_transform(df)
+def preprocess_and_save(force: bool = False) -> pd.DataFrame:
+    output_path = PROCESSED_DIR / "market_data_processed.csv"
+    if force or not output_path.exists():
+        return _process_and_save()
+    return load_processed_dataframe()
 
-SEQ_LEN = 30
 
-def create_sequences(data, seq_len=SEQ_LEN):
-    X, y = [], []
-    for i in range(len(data) - seq_len):
-        X.append(data[i:i+seq_len])
-        y.append(data[i+seq_len])
-    return np.array(X), np.array(y)
+def load_processed_dataframe() -> pd.DataFrame:
+    output_path = PROCESSED_DIR / "market_data_processed.csv"
+    if not output_path.exists():
+        return _process_and_save()
 
-X, y = create_sequences(df["Scaled"].values)
+    df = pd.read_csv(output_path, parse_dates=["Date"])
+    df = df.set_index("Date").sort_index()
+    return df
 
-train_size = int(len(X) * 0.8)
-X_train, X_test = X[:train_size], X[train_size:]
-y_train, y_test = y[:train_size], y[train_size:]
 
-X_train = X_train.reshape((-1, SEQ_LEN, 1))
-X_test = X_test.reshape((-1, SEQ_LEN, 1))
+def train_cutoff_index(length: int, test_ratio: float = TEST_RATIO) -> int:
+    if length < 2:
+        raise ValueError("Le dataset est trop petit pour un split train/test.")
+    split_idx = int(length * (1 - test_ratio))
+    return max(1, min(split_idx, length - 1))
 
-# ---------------------------
-# 3. Modèle baseline LSTM
-# ---------------------------
 
-model = Sequential()
-model.add(LSTM(50, return_sequences=False, input_shape=(SEQ_LEN, 1)))
-model.add(Dense(1))
-model.compile(optimizer="adam", loss="mse")
+def create_sequences(
+    features: np.ndarray,
+    target: np.ndarray,
+    seq_len: int = SEQ_LEN,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if len(features) != len(target):
+        raise ValueError("features et target doivent avoir la même longueur.")
+    if len(features) <= seq_len:
+        raise ValueError("Pas assez de lignes pour créer des séquences.")
 
-history = model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=1)
+    X, y, idx = [], [], []
+    for i in range(seq_len, len(features)):
+        X.append(features[i - seq_len : i])
+        y.append(target[i])
+        idx.append(i)
 
-# ---------------------------
-# 4. Évaluation
-# ---------------------------
-
-pred = model.predict(X_test)
-pred_rescaled = scaler.inverse_transform(pred)
-y_test_rescaled = scaler.inverse_transform(y_test.reshape(-1, 1))
-
-rmse = math.sqrt(mean_squared_error(y_test_rescaled, pred_rescaled))
-mape = mean_absolute_percentage_error(y_test_rescaled, pred_rescaled)
-
-print("RMSE:", rmse)
-print("MAPE:", mape)
-
-# ---------------------------
-# 5. Graphique
-# ---------------------------
-
-plt.figure(figsize=(12,5))
-plt.plot(y_test_rescaled, label="Réalité")
-plt.plot(pred_rescaled, label="Prédiction (baseline LSTM)")
-plt.title("MVP — Baseline LSTM sur VK.PA")
-plt.legend()
-plt.show()
+    return np.array(X), np.array(y), np.array(idx)
