@@ -38,7 +38,7 @@ def _save_merged_predictions(
     return plot_df
 
 
-def evaluate_models(force_retrain: bool = False) -> tuple[float, float, float, float]:
+def evaluate_models(force_retrain: bool = False) -> tuple[float, float, float, float, float, float]:
     baseline = train_baseline(force_retrain=force_retrain, return_artifacts=True)
     enriched = train_enriched(force_retrain=force_retrain, return_artifacts=True)
 
@@ -57,4 +57,6 @@ def evaluate_models(force_retrain: bool = False) -> tuple[float, float, float, f
         enriched["metrics"]["rmse"],
         baseline["metrics"]["mae"],
         enriched["metrics"]["mae"],
+        baseline["metrics"]["mape"],
+        enriched["metrics"]["mape"],
     )
