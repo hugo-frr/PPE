@@ -16,12 +16,12 @@ def run_pipeline(skip_download: bool = False, force_retrain: bool = False) -> No
     process_and_save()
 
     print("=== Étape 3/3 : entraînement + évaluation ===")
-    rmse_base, rmse_enriched, mae_base, mae_enriched = evaluate_models(
+    rmse_base, rmse_enriched, mae_base, mae_enriched, mape_base, mape_enriched = evaluate_models(
         force_retrain=force_retrain
     )
     print("=== Résultats ===")
-    print(f"Baseline   -> RMSE={rmse_base:.4f} | MAE={mae_base:.4f}")
-    print(f"Enriched   -> RMSE={rmse_enriched:.4f} | MAE={mae_enriched:.4f}")
+    print(f"Baseline   -> RMSE={rmse_base:.4f} | MAE={mae_base:.4f} | MAPE={mape_base*100:.2f}%")
+    print(f"Enriched   -> RMSE={rmse_enriched:.4f} | MAE={mae_enriched:.4f} | MAPE={mape_enriched*100:.2f}%")
 
 
 def main() -> None:
